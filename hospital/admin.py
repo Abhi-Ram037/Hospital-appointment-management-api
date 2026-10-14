@@ -1,7 +1,18 @@
 from django.contrib import admin
-from .models import Patient, Doctor, Appointment, Payment
+from .models import Doctor
 
-admin.site.register(Patient)
-admin.site.register(Doctor)
-admin.site.register(Appointment)
-admin.site.register(Payment)
+@admin.register(Doctor)
+class DoctorAdmin(admin.ModelAdmin):
+    list_display = (
+        "id",
+        "name",
+        "specialization",
+        "user",
+    )
+    fields = (
+        "name",
+        "specialization",
+        "consultation_fee",
+        "is_available",
+        "user",
+    )

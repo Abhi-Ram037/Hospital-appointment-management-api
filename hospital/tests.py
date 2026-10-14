@@ -328,7 +328,10 @@ class HospitalAPITests(APITestCase):
             "age": 25
         }, format="json")
 
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_401_UNAUTHORIZED,
+        )
 
     def test_patient_cannot_view_another_patients_appointment(self):
         patient_group, _ = Group.objects.get_or_create(name="Patient")
