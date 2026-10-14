@@ -6,6 +6,7 @@ from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 
 from .models import Patient, Doctor, Appointment, Payment
 from .serializers import (
@@ -272,4 +273,14 @@ class AppointmentCancelView(APIView):
             "message": "Appointment cancelled successfully.",
             "appointment_id": appointment.id,
             "status": appointment.status
+        })
+
+class UserProfileView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response({
+            "message": "Authentication successful",
+            "username": request.user.username,
+            "user_id": request.user.id
         })
