@@ -2,8 +2,10 @@
 from datetime import timedelta
 from decimal import Decimal
 
+from django.contrib.auth.models import User
 from django.test import TestCase
 from django.utils import timezone
+
 from rest_framework.test import APIClient
 
 from .models import Patient, Doctor, Appointment, Payment
@@ -13,6 +15,14 @@ class HospitalAPITests(TestCase):
 
     def setUp(self):
         self.client = APIClient()
+
+        self.admin_user = User.objects.create_superuser(
+            username="testadmin",
+            email="testadmin@example.com",
+            password="TestAdmin123!"
+        )
+
+        self.client.force_authenticate(user=self.admin_user)
 
         self.patient = Patient.objects.create(
             name="Ravi Kumar",
@@ -30,11 +40,14 @@ class HospitalAPITests(TestCase):
 
         future = timezone.localtime() + timedelta(days=5)
 
+        self.future_date = future.date()
+        self.future_time = future.time().replace(tzinfo=None)
+
         self.appointment_data = {
             "patient": self.patient.id,
             "doctor": self.doctor.id,
-            "appointment_date": future.date().isoformat(),
-            "appointment_time": future.strftime("%H:%M:%S"),
+            "appointment_date": self.future_date.isoformat(),
+            "appointment_time": self.future_time.strftime("%H:%M:%S"),
             "reason": "Regular checkup"
         }
 
@@ -42,8 +55,8 @@ class HospitalAPITests(TestCase):
         return Appointment.objects.create(
             patient=self.patient,
             doctor=self.doctor,
-            appointment_date=self.appointment_data["appointment_date"],
-            appointment_time=self.appointment_data["appointment_time"],
+            appointment_date=self.future_date,
+            appointment_time=self.future_time,
             reason="Regular checkup",
             status=status
         )
@@ -81,7 +94,7 @@ class HospitalAPITests(TestCase):
     def test_invalid_phone(self):
         response = self.client.post("/patients/", {
             "name": "Test Patient",
-            "email": "test@example.com",
+            "email": "testphone@example.com",
             "phone": "abc",
             "age": 25
         }, format="json")

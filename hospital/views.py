@@ -1,12 +1,13 @@
 
 from django.db import transaction, IntegrityError
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
 from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
 
 from .models import Patient, Doctor, Appointment, Payment
 from .serializers import (
@@ -15,24 +16,84 @@ from .serializers import (
     AppointmentSerializer,
     PaymentSerializer,
 )
+from .permissions import (
+    IsAdminUserRole,
+    IsPatientRole,
+    IsDoctorRole,
+    IsAdminOrPatientRole,
+    IsAdminOrDoctorRole,
+)
+
+
+def is_admin(user):
+    return (
+        user.is_authenticated
+        and (
+            user.is_staff
+            or user.groups.filter(name="Admin").exists()
+        )
+    )
+
+
+def appointments_for_user(user, allowed_roles):
+    queryset = Appointment.objects.select_related(
+        "patient", "doctor"
+    )
+
+    if is_admin(user):
+        return queryset
+
+    conditions = Q(pk__in=[])
+
+    if (
+        "Patient" in allowed_roles
+        and user.groups.filter(name="Patient").exists()
+    ):
+        patient = getattr(user, "patient_profile", None)
+
+        if patient is not None:
+            conditions |= Q(patient=patient)
+
+    if (
+        "Doctor" in allowed_roles
+        and user.groups.filter(name="Doctor").exists()
+    ):
+        doctor = getattr(user, "doctor_profile", None)
+
+        if doctor is not None:
+            conditions |= Q(doctor=doctor)
+
+    return queryset.filter(conditions)
 
 
 class PatientCreateView(generics.CreateAPIView):
     queryset = Patient.objects.all()
     serializer_class = PatientSerializer
+    permission_classes = [IsAdminUserRole]
 
 
 class DoctorListCreateView(generics.ListCreateAPIView):
     queryset = Doctor.objects.all()
     serializer_class = DoctorSerializer
 
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [AllowAny()]
+        return [IsAdminUserRole()]
+
 
 class AppointmentListCreateView(generics.ListCreateAPIView):
     serializer_class = AppointmentSerializer
 
+    def get_permissions(self):
+        if self.request.method == "POST":
+            return [IsAdminOrPatientRole()]
+        return [IsAuthenticated()]
+
     def get_queryset(self):
-        queryset = Appointment.objects.select_related(
-            "patient", "doctor"
+        queryset = appointments_for_user(
+            self.request.user,
+            ["Patient", "Doctor"]
         )
 
         patient_id = self.request.query_params.get("patient_id")
@@ -53,7 +114,26 @@ class AppointmentListCreateView(generics.ListCreateAPIView):
         )
 
     def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
+        data = request.data.copy()
+
+        if not is_admin(request.user):
+            patient = getattr(
+                request.user, "patient_profile", None
+            )
+
+            if patient is None:
+                return Response(
+                    {
+                        "error": (
+                            "Your account is not linked to a patient record."
+                        )
+                    },
+                    status=status.HTTP_403_FORBIDDEN
+                )
+
+            data["patient"] = patient.pk
+
+        serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
 
         try:
@@ -77,9 +157,13 @@ class AppointmentListCreateView(generics.ListCreateAPIView):
 
 
 class AppointmentDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
     def get(self, request, pk):
         appointment = get_object_or_404(
-            Appointment.objects.select_related("patient", "doctor"),
+            appointments_for_user(
+                request.user, ["Patient", "Doctor"]
+            ),
             pk=pk
         )
 
@@ -101,6 +185,8 @@ class AppointmentDetailView(APIView):
 
 
 class AppointmentStatusUpdateView(APIView):
+    permission_classes = [IsAdminOrDoctorRole]
+
     def put(self, request, pk):
         new_status = request.data.get("status")
 
@@ -116,8 +202,12 @@ class AppointmentStatusUpdateView(APIView):
 
         with transaction.atomic():
             appointment = get_object_or_404(
-                Appointment.objects.select_for_update(),
+                appointments_for_user(request.user, ["Doctor"]),
                 pk=pk
+            )
+
+            appointment = Appointment.objects.select_for_update().get(
+                pk=appointment.pk
             )
 
             if appointment.status == "Cancelled":
@@ -177,6 +267,8 @@ class AppointmentStatusUpdateView(APIView):
 
 
 class AppointmentPaymentView(APIView):
+    permission_classes = [IsAdminOrPatientRole]
+
     def post(self, request, pk):
         payment_method = request.data.get("payment_method")
 
@@ -189,9 +281,13 @@ class AppointmentPaymentView(APIView):
         try:
             with transaction.atomic():
                 appointment = get_object_or_404(
-                    Appointment.objects.select_related("doctor").select_for_update(),
+                    appointments_for_user(request.user, ["Patient"]),
                     pk=pk
                 )
+
+                appointment = Appointment.objects.select_related(
+                    "doctor"
+                ).select_for_update().get(pk=appointment.pk)
 
                 if appointment.status == "Cancelled":
                     return Response(
@@ -235,11 +331,17 @@ class AppointmentPaymentView(APIView):
 
 
 class AppointmentCancelView(APIView):
+    permission_classes = [IsAdminOrPatientRole]
+
     def post(self, request, pk):
         with transaction.atomic():
             appointment = get_object_or_404(
-                Appointment.objects.select_for_update(),
+                appointments_for_user(request.user, ["Patient"]),
                 pk=pk
+            )
+
+            appointment = Appointment.objects.select_for_update().get(
+                pk=appointment.pk
             )
 
             if appointment.status == "Completed":
@@ -274,6 +376,7 @@ class AppointmentCancelView(APIView):
             "appointment_id": appointment.id,
             "status": appointment.status
         })
+
 
 class UserProfileView(APIView):
     permission_classes = [IsAuthenticated]
